@@ -1,0 +1,376 @@
+---
+title: "SonoBat Analysis v3 - 2022"
+subtitle: "ANLY-705-50-A-2023 Spring"
+author: "Howard Nguyen, Salah Brahimi, & Pankaj Gupta"
+date: "2023-04-08"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## load libraries
+```{r message=FALSE, warning = FALSE}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(cluster)
+library(factoextra)
+library(FactoMineR)
+library(datasets)
+library(corrplot)
+library(reshape)
+# Modeling packages
+library(tidymodels)
+library(earth) # for fitting MARS models
+library(caret) # for automating the tuning process
+library(randomForest)
+```
+
+## load the 2022 dataset
+```{r}
+df22 <- read.delim("SierraLeone2022113.txt")
+```
+
+## EDA
+
+```{r}
+# Sub dataset of highly correlated variables
+df22_sub <- subset(df22, select = c('Fc','FreqMaxPwr','StartF','EndF','LowFreq',
+                                    'HiFreq','FreqKnee','FFwd5dB','FFwd15dB','FFwd20dB'))
+head(df22_sub)
+```
+
+```{r}
+# convert from wide format to long format
+data_sub <- melt(df22_sub)
+
+# view first six rows
+head(data_sub)
+```
+
+```{r}
+# create overlaying density plots
+ggplot(data_sub, aes(x=value, fill=variable)) +
+  geom_density(alpha=.25) +
+  ggtitle("Review the density from a group of high correlated variables")
+```
+
+```{r message=FALSE, warning = FALSE}
+# exploring features of SonoBat dataset
+tidymodels_prefer()
+ggplot(df22, aes(x = Fc)) +
+  geom_histogram(aes(y = ..density..), bins = 50, col = "white") +
+  geom_line(stat = "density", color="green", size=0.8) +
+  ylim(0,0.1) +
+  ggtitle("Count of the Frequency of the call") +
+  theme(title=element_text(color = "black", size = 14),
+        axis.title=element_text(size=12,face="bold"))
+```
+
+This plot shows us that the data are right-skewed, there are much smaller numbers than the large count in Fc.
+
+```{r}
+# Exploring the 2022 dataset
+head(df22)
+# str(df_2022)
+# summary(df_2022)
+```
+
+```{r}
+# Remove NA values
+df22 <- na.omit(df22)
+```
+
+```{r}
+# convert characters into factor in case we have it in the dataset
+df22 <- read.delim("SierraLeone2022113.txt") |>
+mutate(across(where(is_character), as_factor)) 
+#print(df22)
+#summary(df22)
+```
+
+```{r}
+# remove those attributes have zero variance and character cols
+df22_new <- df22[, !(names(df22) %in% c("AmpStartLn60ExpC","AmpEndLn60ExpC","NextDirUp",
+                                        "Preemphasis","MinAccpQuality","MaxSegLngth",
+                                        "Max.CallsConsidered","Path","Filename",
+                                        "ParentDir","Filter"))]
+dim(df22_new)
+```
+
+```{r message=FALSE, warning = FALSE}
+# exploring features of SonoBat dataset
+tidymodels_prefer()
+ggplot(df22, aes(x = Fc, colour = HiFreq)) +
+  geom_freqpoly(binwidth = 0.5) +
+  ggtitle("Count and the trend of the Frequency of the call")
+ggplot(df22, aes(x = CallDuration, colour = HiFreq)) +
+  geom_freqpoly(binwidth = 0.5) +
+  ggtitle("Count and the trend of the CallDuration")
+```
+
+ 
+### Visualize correlations between attributes
+
+```{r, fig.height=15, fig.width=15}
+# visualize the correlation in the new dataset
+corrMatrix <- stats::cor(df22_new[,1:ncol(df22_new)])
+corrplot(corrMatrix,
+         order = "hclust", # order for labels, can be "original"
+         type = "upper", # matrix: full, upper, lower
+         diag = F, # remove diagonal
+         tl.cex = 0.6, # font size
+         tl.srt = 75, # label angel
+         tl.col = "black",addrect = 8)
+```
+
+## SPLIT THE DATA
+```{r}
+# Split the data into training and testing sets
+set.seed(123)
+train_idx <- sample(nrow(df22_new), 0.95 * nrow(df22_new))
+train_data <- df22_new[train_idx, ]
+test_data <- df22_new[-train_idx, ]
+```
+
+
+```{r message=FALSE, warning = FALSE}
+ggplot(test_data, aes(x = Fc, y = HiFreq)) +  # create ggplot object with data and aesthetics
+  #geom_jitter() + ggtitle("Frequency of the call vs. High Frequency") +
+  geom_point() + ggtitle("Frequency of the call vs. High Frequency") + # add points to the plot
+  geom_line(data = test_data, colour = "green", size = 0.2) +
+  xlab("Frequency of the call") + ylab("High Frequency") +
+  geom_smooth(method = "lm") + # add a linear regression line to the plot
+  theme(title=element_text(color = "black", size = 16),
+        axis.title=element_text(size=12,face="bold"))
+```
+
+```{r message=FALSE, warning = FALSE}
+ggplot(test_data, aes(x = Fc, y = LowFreq)) +  # create ggplot object with data and aesthetics
+  #geom_jitter() + ggtitle("Frequency of the call vs. Low Frequency") +
+  geom_point() + ggtitle("Frequency of the call vs. Low Frequency") + # add points to the plot
+  geom_line(data = test_data, colour = "green", size = 0.2) +
+  xlab("Frequency of the call") + ylab("Low Frequency") +
+  geom_smooth(method = "lm") + # add a linear regression line to the plot
+  theme(title=element_text(color = "black", size = 16),
+        axis.title=element_text(size=12,face="bold"))
+```
+
+```{r message=FALSE, warning = FALSE}
+ggplot(test_data, aes(x = CallDuration, y = LowFreq)) +  # create ggplot object with data and aesthetics
+  geom_point() + ggtitle("CallDuration vs. Low Frequency") + # add points to the plot
+  geom_line(data = test_data, colour = "green", size = 0.2) +
+  xlab("CallDuration") + ylab("Low Frequency") +
+  geom_smooth(method = "lm") + # add a linear regression line to the plot
+  theme(title=element_text(color = "black", size = 16),
+        axis.title=element_text(size=12,face="bold"))
+```
+
+```{r message=FALSE, warning = FALSE}
+ggplot(test_data, aes(x = CallDuration, y = HiFreq)) +  # create ggplot object with data and aesthetics
+  geom_point() + ggtitle("CallDuration vs. High Frequency") + # add points to the plot
+  geom_line(data = test_data, colour = "green", size = 0.2) +
+  xlab("CallDuration") + ylab("High Frequency") +
+  geom_smooth(method = "lm") + # add a linear regression line to the plot
+  theme(title=element_text(color = "black", size = 18),
+        axis.title=element_text(size=12,face="bold"))
+```
+
+
+```{r}
+# Train the random forest model
+rf_model <- randomForest(Fc ~ ., data = train_data, ntree = 10)
+# use 10 trees to grow in the forest
+```
+
+```{r}
+print(rf_model)
+```
+
+The mean of squared residuals is 0.126737 and % Var explained is 99.92. This suggests that the model is performing well in terms of predicting the target variable Fc, as it has a low mean squared error and high variance explained.
+
+Note:
+ - The mean of squared residuals: This is a measure of the average distance between the predicted and actual values of the target variable (in this case, Fc) squared. A lower value indicates better performance.
+
+ - % Var explained: This is the percentage of variance in the target variable that is explained by the model. A higher value indicates better performance.
+ 
+```{r}
+# Evaluate the model
+predictions <- predict(rf_model, newdata = test_data)
+#predictions
+```
+
+```{r}
+summary(predictions)
+```
+
+```{r}
+# Evaluate the model performance using confusion matrix
+#conf_mat <- caret::confusionMatrix(predictions, test_data$Fc)
+#print(conf_mat)
+```
+
+we are using ggplot2 to create a scatter plot of the actual vs. predicted values on the testing set. We are also adding a diagonal dashed line to represent perfect predictions.
+
+```{r message=FALSE, warning = FALSE}
+# To predict the trends of Fc with the test data
+ggplot(data.frame(Predicted=predictions, Actual=test_data$Fc), aes(x=Actual, y=Predicted)) + 
+  geom_point() + ggtitle("Predictions on Frequency of the call (Fc)") +
+  geom_abline(intercept=0, slope=1, color="red") +
+  geom_smooth(method = "lm") + # add a linear regression line to the plot
+  theme(title=element_text(color = "black", size = 16),
+        axis.title=element_text(size=12,face="bold"))
+```
+This scatterplot of the predicted values on the y-axis and actual values on the x-axis, with a red line showing perfect agreement between the two.
+The result: Fc (Frequency of the call) attribute is perfectly fit in the test data
+
+```{r message=FALSE, warning = FALSE}
+# To predict the trends of HiFreq with the test data
+ggplot(data.frame(Predicted=predictions, Actual=test_data$HiFreq), aes(x=Actual, y=Predicted)) + 
+  geom_point() + ggtitle("Predictions on High Frequency (HiFreq)") +
+  geom_abline(intercept=0, slope=1, color="red") +
+  geom_smooth(method = "lm", color = "green") + # add a linear regression line to the plot
+  theme(title=element_text(color = "black", size = 18),
+        axis.title=element_text(size=12,face="bold"))
+```
+Result: The HiFreq attribute performs lower fit in the test data
+
+```{r message=FALSE, warning = FALSE}
+# To predict the trends of LowFreq with the test data
+ggplot(data.frame(Predicted=predictions, Actual=test_data$LowFreq), 
+       aes(x=Actual, y=Predicted)) + 
+  geom_point() + ggtitle("Predictions on Low Frequency (LowFreq)") +
+  geom_abline(intercept=0, slope=1, color="red") +
+  geom_smooth(method = "lm", color = "green") + # add a linear regression line to the plot
+  theme(title=element_text(color = "black", size = 18),
+        axis.title=element_text(size=12,face="bold"))
+```
+Result: The LowFreq data trend performs higher fit in the test data
+
+```{r}
+predictions <- as.factor(predictions)
+actual <- as.factor(test_data$Fc)
+```
+
+we are using the predict function to make predictions on the testing set using the trained random forest model. Then, we are using the confusionMatrix function from the caret package to evaluate the performance of the model. This function provides a table of true positive, true negative, false positive, and false negative counts, as well as various performance metrics such as accuracy, sensitivity, and specificity.
+
+```{r}
+# Reserved code for re-run to create the confusion matrix
+# Get the unique levels of both vectors
+pred_levels <- unique(predictions)
+actual_levels <- unique(actual)
+
+# Combine the levels and make sure they are the same for both vectors
+all_levels <- unique(c(pred_levels, actual_levels))
+
+# Convert both vectors to factors with the same levels
+predictions <- factor(predictions, levels = all_levels)
+actual <- factor(actual, levels = all_levels)
+
+```
+
+Note: 
+confusionMatrix() is a function in R used to evaluate the performance of a classification model. It takes in two vectors, one with the predicted classes and the other with the actual classes, and produces a confusion matrix that summarizes the results. From the confusion matrix, various performance metrics such as accuracy, precision, recall, and F1 score can be calculated to assess the model's performance. confusionMatrix() is particularly useful for multi-class classification problems, where it can handle more than two classes and produce metrics that take into account the imbalances in class distribution.
+
+```{r}
+# Create confusion matrix
+confusionMatrix(predictions, actual)
+
+# View confusion matrix
+#print(cm$table)
+```
+
+
+```{r}
+# Check the correlation value between two variables
+stats::cor(df22$Fc, df22$FreqMaxPwr)
+```
+
+```{r}
+df22 |>  
+  select(Fc, FreqMaxPwr, LowFreq, CallDuration) |>
+  boxplot()
+```
+
+## MODEL SELECTION - MARS
+MARS (Multivariate Adaptive Regression Splines) is a type of regression analysis that is designed to be flexible in handling both linear and nonlinear relationships between the response variable and the predictors.
+
+One of the advantages of MARS is that it uses a stepwise approach to build the model, where the algorithm iteratively adds basis functions (splines) and interactions between them, based on their predictive power. This allows MARS to capture complex relationships between the predictors and the response variable, even in high-dimensional datasets.
+
+Because MARS is built using a stepwise approach that selects only the most relevant predictors and interactions, it has a built-in method for variable selection and regularization. This means that MARS can avoid overfitting the training data, making it less prone to the problem of overfitting that typically arises when using other machine learning models with many parameters.
+
+Therefore, MARS may not necessarily need a separate train/test split, as it automatically selects the best predictors and interactions during the modeling process. However, it is still recommended to use some form of cross-validation or resampling technique to validate the model's performance and ensure that it is generalizable to new data.
+```{r}
+# fit a basic MARS model - Multivariate Adaptive Regression Splines
+mars1 <- earth(
+  Fc ~ ., data = df22_new
+)
+summary(mars1)
+```
+The earth function fits a multivariate adaptive regression spline (MARS) model to the data, which can capture nonlinear relationships and interactions between variables. In this case, the model appears to have selected seven terms to include in the final model, out of a total of 101 predictors.
+
+The "Selected 7 of 7 terms, and 3 of 101 predictors" line indicates that the model has used only seven of the seven terms that were available in the formula you specified (i.e., all variables except for the response variable Fc). This suggests that some of the terms may have been redundant or not useful for predicting Fc.
+
+The "Termination condition" line shows that the model stopped adding terms once the maximum R-squared value was reached, indicating that the model has a good fit to the data. The "Importance" line shows which predictors were most important in the model, with the FreqCtr, HiFtoFcExpAmp, Bndwdth, and TimeInFile variables apparently not contributing much to the fit.
+
+ - GCV = 0.2868884: Generalized Cross-Validation (GCV) score for the final model, where 0 is the minimum value and lower values indicate better models.
+ - RSS = 22142.33: Residual Sum of Squares (RSS) for the final model, which measures the total difference between the predicted and actual values of the response variable. A lower RSS score indicates a better fit of the model.
+ - GRSq = 0.9981652: Generalized R-Squared (GRSq) for the final model, which is a measure of how well the model fits the data, where 1 is the maximum value and higher values indicate better models.
+ - RSq = 0.9981658: R-Squared (RSq) for the final model, which is a similar measure of how well the model fits the data as GRSq. A higher R-squared score indicates a better fit of the model.
+
+```{r}
+plot(mars1, which = 1)
+```
+
+The plot method for MARS model objects provide useful performance and residual plots.
+This model selection plot that graphs the GCV R^2 (left-hand y-axis and solid black line) based on the number of terms retained in the model (x-axis) which are constructed from a certain number of original predictors (right_hand y-axis).
+The vertical dashed line at 7 tells us the optimal number of non-intercept terms retained where marginal increases in GCV R^2 are less than 0.001.
+
+For this model, 6 non-intercept terms were retained which are based on 3 predictors. Any additional terms retained in the model, over and above these 6, result in less than 0.001 improvement in the GCV R^2.
+
+```{r}
+# Other views in plot of model MARS1
+plot(mars1)
+```
+
+## MARS Model degree 2
+```{r}
+# fit a basic MARS model - Multivariate Adaptive Regression Splines
+mars2 <- earth(
+  Fc ~ ., data = df22_new,
+  degree = 2
+)
+```
+
+```{r}
+summary(mars2)
+```
+
+```{r}
+plot(mars2, which = 1)
+```
+
+### MARS model with CallDuration as a predictor
+
+```{r}
+# fit a basic MARS model - Multivariate Adaptive Regression Splines
+mars3 <- earth(
+  CallDuration ~ ., data = df22_new
+)
+summary(mars3)
+```
+
+```{r}
+plot(mars3, which = 1)
+```
+
+```{r}
+plot(mars3)
+```
+ 
